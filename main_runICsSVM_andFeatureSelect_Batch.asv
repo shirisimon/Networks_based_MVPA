@@ -103,17 +103,20 @@ for s = 1:size(subjects,2); % iteretae over subjects
     
     
     
-    %% 6. Feature\Components\RSNs selection
+   %% 6. Feature\Components\RSNs selection 
+    % fine-tuning SVM params for feature selection :
+    disp(['Processung subject ' subjects{s} ': running SVM diagnostics'])
+    [params.c, params.g] = doICsSVM_diagnostics(dataA_orig, dataB_orig, params);
+    params.svm_params.cost(s) = params.c;
+    params.svm_params.gamma(s) = params.g;
     if do_featureSelection
-        disp(['Processing subject ' subjects{s} ': sorting features'])
-        [params.c, params.g] = doICsSVM_diagnostics(dataA_orig, dataB_orig, params);
-        params.svm_params.cost(s) = params.c;
-        params.svm_params.gamma(s) = params.g;
+        % real :
+        disp(['Processing subject ' subjects{s} ': sorting features SVM'])
         realAcc = doICsSVM(dataA_orig, dataB_orig, params, file, 0);
-        [~, ~,  sorted_feats(:,s), feats2keep] = ...
+        [~, ~,  sorted_feats(:,s), feats2keep(:,s)] = ...
             extractFeatures2SVM(dataA_orig, dataB_orig, realAcc, params);
-        dataA = dataA_orig(:,sorted_feats(1:feats2keep,s));
-        dataB = dataB_orig(:,sorted_feats(1:feats2keep,s));
+        dataA = dataA_orig(:,sorted_feats(feats2keep(:,s),s));
+        dataB = dataB_orig(:,sorted_feats(feats2keep(:,s),s));
     else
         dataA = dataA_orig;
         dataB = dataB_orig;
@@ -121,13 +124,14 @@ for s = 1:size(subjects,2); % iteretae over subjects
     end
     
     %% 7. do MCPA
-    % real :
+     % fine-tuning SVM params with selected features: 
     [params.c, params.g] = doICsSVM_diagnostics(dataA, dataB, params);
     params.svm_params.cost(s) = params.c;
     params.svm_params.gamma(s) = params.g;
+    % real
     realAcc = doICsSVM(dataA, dataB, params, file, 0);
     fprintf('real accurcy with %d features for subject %s : %.4f \n',  ...
-       size(feats2keep,1), subjects{s}, realAcc);
+        featuresNum, subjects{s}, realAcc);
     res{s,1} = subjects{s};
     res{s,2} = realAcc;
     

@@ -9,8 +9,9 @@ for f = 1:size(dataA_orig,2)
 end
 
 [nof_acc, sorted_feats] = sort(acc);
+diffacc = nof_acc - acc(sorted_feats); 
 uniq = unique(nof_acc);
-feats2keep = length(find(nof_acc < uniq(end)*ones(1,size(nof_acc,2))));
+feats2keep = find(nof_acc < uniq(end)*ones(1,size(nof_acc,2)));
 
 
 
