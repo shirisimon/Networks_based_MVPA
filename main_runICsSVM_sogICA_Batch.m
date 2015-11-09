@@ -1,0 +1,137 @@
+%% runICsSVMBatch_sogICA
+% run SVM on IC or Rodriguez clusters
+
+clear; close all; clc
+
+%% params
+res_name            = 'mean_tmp2_sogICA';
+loc_type            = 'rest';
+do_shuffle          = 1;
+rootdir             = 'D:\study 6 - ICs based classification\';
+subjects            = {'DM' 'EK' 'EL' 'HS' 'IN' 'LG' 'MK' 'MW' 'TL' 'YR'};
+classificationName  = 'beep';
+conditions2classify = {'beep','blank'};
+tmpFromOnset        = [2, 0];   % [tmp of 1st cond, tmp for 2nd cond]
+dimreduc_func       = 'extractTaskICATimeCourseFromICMapAndVTC';
+dimreduc_type       = 'ica';    % 'ica' or 'rod'
+
+
+params.ica.ics              = [1,3:6,8,13,14,19]; % BOLD ics (inspect by eye and finger print)
+params.ica.inverse_polarity = 0;
+params.ica.sogica           = 1;
+params.rodclust.halo        = 'cl';   % rodriguez clustering - halo(1), cl(0)
+params.rodclust.cutoff      = '0.45'; % density (RBF) cutoff
+params.rodclust.size        = '0';    % cluster number
+params.shuffleMapsNum       = 100;    % shuffle maps num
+params.factor               = 1;
+
+for s = 1:size(subjects,2); % iteretae over subjects
+    file.output_path = [rootdir 'results\'];
+    file.output_name = [subjects{s} '_MCPA_' classificationName num2str(tmpFromOnset(1)) '.mat'];
+    
+    %% 1. load task data:
+    disp(['Processing subject ' subjects{s}  ': extracting IC time courses']);
+    % vtc1 = BVQXfile([path subjects{s} '_bd1_MIA_SCCAI2_3DMCTS_THPGLMF2c_TAL.vtc']); % load task vtc
+    vtc1 = findFilesBVQX([rootdir 'data\' subjects{s} '\bd1\'],'*bd1*_TAL.vtc',struct('maxdepth',1) );
+    vtc2 = findFilesBVQX([rootdir 'data\' subjects{s} '\bd2\'],'*bd2*_TAL.vtc',struct('maxdepth',1) );
+    
+    vtc1 = BVQXfile(vtc1{1});
+    vtc2 = BVQXfile(vtc2{1});
+    vtc1 = zscore(vtc1.VTCData);
+    vtc2 = zscore(vtc2.VTCData);
+    vtc = (vtc1 + vtc2)/2; % mean
+    % vtc = [vtc1; vtc2];    % concatinate
+    
+    
+    %% 2. Extract rest ICs time courses:
+    count    = 1;
+    icaloop = params.ica.ics +(s-1)*27;                    % if ICA
+    rodloop = 1:10;  % 1:str2double(params.rodclust.size); % if Rodriguez (constant cluster)
+    for c = icaloop;
+        disp(['Extract IC No ' num2str(c) ' for Subject ' subjects{s}]);
+        if strcmp(loc_type, 'rest')
+            ict(:,c) = extractRestICATimeCourseFromICMapAndVTC...
+                (c, rootdir, vtc, subjects{s}, params);
+        else
+            ict(:,c) = extractTaskICATimeCourseFromICMapAndVTC...
+                (c, rootdir, vtc, subjects{s}, params);
+        end
+        count = count+1;
+    end
+    
+    %% 3. Extract task conditions time points :
+    disp(['Processing subject ' subjects{s}  ': extracting condition time points']);
+    prt = BVQXfile([rootdir 'data\beep_protocol.prt']);
+    prt = prt.Cond;
+    [idxA, idxB] = getConditionsReleventTimePoints...
+        (size(vtc1,1), prt, conditions2classify, tmpFromOnset);
+    
+    %% 4. Assign ICs weights to task relevant volumes
+    if size(vtc,1) > size(vtc1,1) % if vtc is concatinated
+        idxA = [idxA; idxA+size(vtc1,1)];
+        idxB = [idxB; idxB+size(vtc1,1)];
+    end
+    dataA = ict(idxA,:);
+    dataB = ict(idxB,:);
+    
+    %% 4. Extract equal number of trials from all conditions :
+    [dataA, dataB, trials] = getConditionsEqualNumOfPoints(dataA, dataB);
+    save([file.output_path file.output_name], 'dataA', 'dataB', 'params');
+    
+    %% 5. doMCPA (multi-component-pattern-analysis)
+    load(fullfile(file.output_path, file.output_name));
+    
+    % fine-tuning SVM params:
+    disp(['Process subject ' subjects{s} ': running SVM diagnostics'])
+    [params.c, params.g] = doICsSVM_diagnostics(dataA, dataB, params);
+    params.svm_params.cost(s) = params.c;
+    params.svm_params.gamma(s) = params.g;
+    
+    % real :
+    realAcc = doICsSVM(dataA, dataB, params, file, 0);
+    fprintf('real accurcy for subject %s : %.4f \n',  subjects{s}, realAcc);
+    % save summerized results:
+    res{s,1} = subjects{s};
+    res{s,2} = realAcc;
+    
+    if do_shuffle % shuffle :
+        shuffleAccDist = doICsSVM(dataA, dataB, params, file, 1);
+        fprintf('highest shuffle accuracy : %.4f \n', max(shuffleAccDist));
+        % get p value :
+        sortSuflleDist = sort(shuffleAccDist);
+        logSort = realAcc > sortSuflleDist;
+        pval = 1 - sum(logSort)/length(logSort);
+        fprintf('p value (FWER) : %.4f \n', max(pval));
+        res{s,3} = {shuffleAccDist};
+        res{s,4} = pval;
+    end
+    
+    %% cleanup memory
+    root=BVQXfile();
+    root.ClearObjects('prt');
+    root.ClearObjects('vtc');
+    root.ClearObjects('ica');
+    clear ict
+    clear dataA dataA_orig idxA
+    clear dataA dataA_orig idxB
+    
+end
+res_vars = {'subject_name', 'real_acc', 'shuffle_acc_dist', 'pval'};
+eval(['res_' res_name ' = res;']);
+save([loc_type '_results_v2.mat'],'res_vars', ['res_' res_name], '-append');
+
+%% parameters fitting
+% tmp from onset - 4 is better than the rest
+% try concate zscore with factor 2 vtc vs mean vtcs (zscored) - same
+% try normalize the component time course - same
+% try feature selection with sogICA (same)
+% normalized features between [0,1] - very helpful
+% fine tunning c and gamma - same
+
+% 'res_mean_boldICsMan_fineTuned' - provided the best results
+
+
+
+
+
+
